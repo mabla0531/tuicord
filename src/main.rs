@@ -1,33 +1,40 @@
-use std::{
-    fs,
-    io::{prelude::*, BufReader},
-    net::TcpListener,
-};
+mod model;
+
+use model::{login_failure::Failure, login_success::Success, captcha_required::Captcha, LoginCredentials};
+
+// endpoint = https://discord.com/api/v9/
 
 #[tokio::main]
 async fn main() {
-    // login test
-    // init server
-    let server = TcpListener::bind("0.0.0.0:7463").unwrap();
+    let response = reqwest::Client::new()
+        .post("https://discord.com/api/v9/auth/login")
+        .json(&LoginCredentials {
+            email:    "NOT MY BURNER ACCOUNT EMAIL".to_string(),
+            password: "NOT MY BURNER ACCOUNT PASSWORD".to_string(),
+        })
+        .send()
+        .await
+        .unwrap();
 
-    open::that(format!("https://discord.com/oauth2/authorize?client_id={}&response_type=code&redirect_uri=http%3A%2F%2F0.0.0.0%3A7463&scope=messages.read", fs::read_to_string(".env").unwrap())).unwrap();
+    let response= response.text().await.unwrap();
 
-    // receive on server
-    for stream in server.incoming() {
-        let mut stream = stream.unwrap();
-
-        let buf_reader = BufReader::new(&stream);
-        let http_request: Vec<_> = buf_reader
-            .lines()
-            .map(|res| res.unwrap())
-            .take_while(|line| !line.is_empty())
-            .collect();
-        println!("Request Received: \n\n{http_request:#?}");
-
-        stream.write_all("HTTP/1.1 200 OK".as_bytes()).unwrap();
-        // TODO write a confirmation or declination HTTP response with an HTML body that looks pretty (the user will see this in their browser after auth)
+    match serde_json::from_str::<Success>(response.as_str()) {
+        Ok(success) => {
+            println!("User ID: {}", success.user_id);
+            println!("Token: {}", success.token);
+            println!("User Settings: {:?}", success.user_settings);
+        }
+        Err(_) => match serde_json::from_str::<Failure>(response.as_str()) {
+            Ok(failure) => {
+                println!("Message: {}", failure.message);
+                println!("Code: {}", failure.code);
+                println!("Errors: {:?}", failure.errors);
+            }
+            Err(_) => match serde_json::from_str::<Captcha>(response.as_str()) {
+                // Captcha handling is a massive question mark right now, I have no clue how/if it will be done in a CLI
+                Ok(_) => println!("Captcha required"),
+                Err(_) => println!("I have no effing idea what went wrong on the API end lmao, payload is \n{}", response)
+            }
+        }
     }
-    // close server
-
-    // hold auth token
 }
